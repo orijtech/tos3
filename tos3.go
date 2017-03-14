@@ -6,9 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -51,7 +49,10 @@ type Request struct {
 	URL     string `json:"url,omitempty"`
 	Name    string `json:"name,omitempty"`
 
-	S3Client *s3.S3 `json:"-"`
+	ContentType string `json:"content_type,omitempty"`
+
+	S3Client      *s3.S3 `json:"-"`
+	ContentLength int64  `json:"-"`
 
 	AuthInfo *AuthInfo `json:"auth_info,omitempty"`
 	GeoInfo  *GeoInfo  `json:"geo_info,omitempty"`
@@ -99,6 +100,47 @@ func (req *Request) Delete() (*Response, error) {
 	return nil, errUnimplemented
 }
 
+func (req *Request) FUploadToS3(body io.ReadSeeker) (*Response, error) {
+	// TODO: See if this content was already uploaded,
+	// bearing the same path and MD5Checksum then
+	// make that a retrieval instead of an upload
+	// to conserve bandwidth
+	pin := &s3.PutObjectInput{
+		Bucket: aws.String(req.Bucket),
+		Key:    aws.String(req.Path),
+		Body:   body,
+	}
+
+	if ct := req.ContentType; ct != "" {
+		pin.ContentType = aws.String(ct)
+	}
+
+	if !req.Private {
+		pin.ACL = aws.String("public-read")
+	}
+
+	if req.ContentLength >= 1 {
+		pin.ContentLength = &req.ContentLength
+	}
+
+	fmt.Printf("pin: #%v\n", pin)
+
+	pout, err := req.S3Client.PutObject(pin)
+	if err != nil {
+		return nil, err
+	}
+
+	resp := &Response{
+		Bucket:    *pin.Bucket,
+		Name:      *pin.Key,
+		URL:       makeS3URL(pin),
+		ETag:      *pout.ETag,
+		VersionId: *pout.VersionId,
+	}
+
+	return resp, nil
+}
+
 func (req *Request) UploadToS3() (*Response, error) {
 	if err := req.Validate(); err != nil {
 		return nil, err
@@ -125,93 +167,41 @@ func (req *Request) UploadToS3() (*Response, error) {
 		contentType = http.DetectContentType(sniffBytes)
 	}
 
-	body := io.MultiReader(bytes.NewReader(sniffBytes), res.Body)
-	var prs io.ReadSeeker
+	// Otherwise we have to bite the bullet here
+	// and write to tmpfile then cleanup after
+	ctx := &tmpfile.Context{
+		Suffix: fmt.Sprintf("tos3-%s", requestId),
+	}
+	tmpf, err := tmpfile.New(ctx)
+	if err != nil {
+		_ = abort()
+		return nil, err
+	}
+	oldAbort := abort
+	abort = func() error {
+		_ = oldAbort()
+		return tmpf.Done()
+	}
+	defer abort()
 
 	var md5Checksum string
-
-	if res.ContentLength > 0 && false { // TODO: See why s3 trips up about the stitched up body
-		var pwc io.WriteCloser
-		prs, pwc, err = os.Pipe()
-		if err != nil {
-			_ = abort()
-			return nil, err
-		}
-
-		go func() {
-			defer pwc.Close()
-			defer res.Body.Close()
-			n, err := io.Copy(pwc, body)
-			log.Printf("[%s] n: %d err: %v", requestId, n, err)
-		}()
-	} else {
-		// Otherwise we have to bite the bullet here
-		// and write to tmpfile then cleanup after
-		ctx := &tmpfile.Context{
-			Suffix: fmt.Sprintf("tos3-%s", requestId),
-		}
-		tmpf, err := tmpfile.New(ctx)
-		if err != nil {
-			_ = abort()
-			return nil, err
-		}
-		oldAbort := abort
-		abort = func() error {
-			_ = oldAbort()
-			return tmpf.Done()
-		}
-		defer abort()
-
-		md5H := md5.New()
-		tr := io.TeeReader(body, md5H)
-		if _, err := io.Copy(tmpf, tr); err != nil {
-			return nil, err
-		}
-		prs = tmpf
-		md5Checksum = fmt.Sprintf("%x", md5H.Sum(nil))
+	md5H := md5.New()
+	body := io.MultiReader(bytes.NewReader(sniffBytes), res.Body)
+	tr := io.TeeReader(body, md5H)
+	n, err := io.Copy(tmpf, tr)
+	if err != nil {
+		return nil, err
 	}
-
-	// TODO: See if this content is already uploaded
-	// bearing the same path and MD5Checksum then
-	// make that a retrieval instead of an upload
-	// to conserve bandwidth
-
-	pin := &s3.PutObjectInput{
-		Bucket: aws.String(req.Bucket),
-		Key:    aws.String(req.Path),
-		Body:   prs,
-	}
-
-	if contentType != "" {
-		pin.ContentType = aws.String(contentType)
-	}
-
-	if !req.Private {
-		pin.ACL = aws.String("public-read")
-	}
-
-	if res.ContentLength >= 1 {
-		pin.ContentLength = &res.ContentLength
-	}
-
-	fmt.Printf("pin: #%v\n", pin)
-
-	pout, err := req.S3Client.PutObject(pin)
+	req.ContentType = contentType
+	req.ContentLength = n
+	s3Res, err := req.FUploadToS3(tmpf)
 	if err != nil {
 		return nil, err
 	}
 
-	resp := &Response{
-		Bucket:      *pin.Bucket,
-		Name:        *pin.Key,
-		URL:         makeS3URL(pin),
-		ETag:        *pout.ETag,
-		VersionId:   *pout.VersionId,
-		RequestId:   requestId,
-		MD5Checksum: md5Checksum,
-	}
-
-	return resp, nil
+	md5Checksum = fmt.Sprintf("%x", md5H.Sum(nil))
+	s3Res.MD5Checksum = md5Checksum
+	return s3Res, nil
 }
 
 func statusOK(code int) bool { return code >= 200 && code <= 299 }
