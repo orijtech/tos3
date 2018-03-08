@@ -123,22 +123,27 @@ func (req *Request) FUploadToS3(body io.ReadSeeker) (*Response, error) {
 		pin.ContentLength = &req.ContentLength
 	}
 
-	fmt.Printf("pin: #%v\n", pin)
-
 	pout, err := req.S3Client.PutObject(pin)
 	if err != nil {
 		return nil, err
 	}
 
 	resp := &Response{
-		Bucket:    *pin.Bucket,
-		Name:      *pin.Key,
+		Bucket:    derefStrPointer(pin.Bucket),
+		Name:      derefStrPointer(pin.Key),
 		URL:       makeS3URL(pin),
-		ETag:      *pout.ETag,
-		VersionId: *pout.VersionId,
+		ETag:      derefStrPointer(pout.ETag),
+		VersionId: derefStrPointer(pout.VersionId),
 	}
 
 	return resp, nil
+}
+
+func derefStrPointer(ptr *string) string {
+	if ptr == nil {
+		return ""
+	}
+	return *ptr
 }
 
 func (req *Request) UploadToS3() (*Response, error) {
