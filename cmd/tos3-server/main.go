@@ -10,13 +10,13 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
 
 	"github.com/odeke-em/go-uuid"
-	"github.com/odeke-em/tos3"
+	"github.com/orijtech/tos3"
 )
 
 var s3Client *s3.S3
