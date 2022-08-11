@@ -2,6 +2,7 @@ package tos3
 
 import (
 	"bytes"
+	"context"
 	"crypto/md5"
 	"errors"
 	"fmt"
@@ -11,6 +12,8 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/s3"
+	"go.opencensus.io/plugin/ochttp"
+	"go.opencensus.io/trace"
 
 	"github.com/odeke-em/go-uuid"
 	"github.com/odeke-em/tmpfile"
@@ -146,14 +149,31 @@ func derefStrPointer(ptr *string) string {
 	return *ptr
 }
 
-func (req *Request) UploadToS3() (*Response, error) {
+var tracedHTTPClient = &http.Client{
+	Transport: &ochttp.Transport{},
+}
+
+func (req *Request) UploadToS3(ctx context.Context) (_ *Response, rerr error) {
+	ctx, span := trace.StartSpan(ctx, "(*Request).UploadToS3")
+	defer func() {
+		if rerr != nil {
+			span.SetStatus(trace.Status{
+				Message: rerr.Error(),
+				Code:    trace.StatusCodeInternal,
+			})
+		}
+		span.End()
+	}()
+
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}
 
-	requestId := uuid.NewRandom().String()
-
-	res, err := http.Get(req.URL)
+	hreq, err := http.NewRequestWithContext(ctx, "GET", req.URL, nil)
+	if err != nil {
+		return nil, err
+	}
+	res, err := tracedHTTPClient.Do(hreq)
 	if err != nil {
 		return nil, err
 	}
@@ -167,17 +187,17 @@ func (req *Request) UploadToS3() (*Response, error) {
 	var contentType string
 	// We've got to sniff the contentType first
 	sniffBytes := make([]byte, 512)
-	_, err = io.ReadAtLeast(res.Body, sniffBytes, 1)
-	if err == nil {
-		contentType = http.DetectContentType(sniffBytes)
+        if n, err := io.ReadAtLeast(res.Body, sniffBytes, 1); err == nil && n > 0 {
+            contentType = http.DetectContentType(sniffBytes[:n])
 	}
 
 	// Otherwise we have to bite the bullet here
 	// and write to tmpfile then cleanup after
-	ctx := &tmpfile.Context{
+	requestId := uuid.NewRandom().String()
+	tctx := &tmpfile.Context{
 		Suffix: fmt.Sprintf("tos3-%s", requestId),
 	}
-	tmpf, err := tmpfile.New(ctx)
+	tmpf, err := tmpfile.New(tctx)
 	if err != nil {
 		_ = abort()
 		return nil, err

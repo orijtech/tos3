@@ -10,10 +10,13 @@ import (
 	"net/http"
 	"strings"
 
+	"contrib.go.opencensus.io/exporter/ocagent"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
+	"go.opencensus.io/plugin/ochttp"
+	"go.opencensus.io/trace"
 
 	"github.com/odeke-em/go-uuid"
 	"github.com/orijtech/tos3"
@@ -61,6 +64,8 @@ func quotaCheck(req *tos3.Request) {
 }
 
 func uploadIt(rw http.ResponseWriter, req *http.Request) {
+        ctx, span := trace.StartSpan(req.Context(), "uploadIt")
+        defer span.End()
 	defer req.Body.Close()
 
 	preq, err := parseReq(req.Body)
@@ -80,7 +85,7 @@ func uploadIt(rw http.ResponseWriter, req *http.Request) {
 	}
 
 	preq.S3Client = s3Client
-	resp, err := preq.UploadToS3()
+	resp, err := preq.UploadToS3(ctx)
 	if err != nil {
 		http.Error(rw, err.Error(), http.StatusInternalServerError)
 		return
@@ -97,20 +102,37 @@ func uploadIt(rw http.ResponseWriter, req *http.Request) {
 
 func main() {
 	var port int
+	ocAgentAddress := flag.String("ocagent-addr", "", "The address to connect to the OpenCensus/Telemetry CAgent")
 	flag.IntVar(&port, "port", 8833, "the port to run it on")
 	flag.StringVar(&defaultBucket, "default-bucket", "tatan", "the default bucket to use")
 	flag.StringVar(&defaultPath, "common-io", "tatan", "the default path to use")
 	flag.Parse()
 
-	http.HandleFunc("/", uploadIt)
+	oce, err := ocagent.NewExporter(
+		ocagent.WithInsecure(),
+		ocagent.WithServiceName("cmd/tos3"),
+		ocagent.WithAddress(*ocAgentAddress),
+	)
+	if err != nil {
+		panic(err)
+	}
+	defer oce.Stop()
 
-	srv := &http.Server{
-		Addr: fmt.Sprintf(":%d", port),
+	trace.RegisterExporter(oce)
+	trace.ApplyConfig(trace.Config{
+		DefaultSampler: trace.AlwaysSample(),
+	})
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", uploadIt)
+	ocmux := &ochttp.Handler{
+		Handler: mux,
 	}
 
-	log.Printf("running on %v\n", srv.Addr)
+	addr := fmt.Sprintf(":%d", port)
+	log.Printf("running on %v\n", addr)
 
-	if err := srv.ListenAndServe(); err != nil {
+	if err := http.ListenAndServe(addr, ocmux); err != nil {
 		log.Fatal(err)
 	}
 }
