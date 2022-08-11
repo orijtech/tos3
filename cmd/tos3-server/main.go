@@ -8,6 +8,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 
 	"contrib.go.opencensus.io/exporter/ocagent"
@@ -19,6 +20,7 @@ import (
 	"go.opencensus.io/trace"
 
 	"github.com/odeke-em/go-uuid"
+	"github.com/orijtech/otils"
 	"github.com/orijtech/tos3"
 )
 
@@ -36,12 +38,7 @@ func pathOf(req *tos3.Request) string {
 
 func init() {
 	envCred := credentials.NewEnvCredentials()
-	creds, err := envCred.Get()
-	if err != nil {
-		log.Fatalf("failed to retrieve environment credentials: %v", err)
-	}
 	config := aws.NewConfig().WithCredentials(envCred)
-	fmt.Printf("creds: %#v\n", creds)
 	sess := session.Must(session.NewSession(config))
 	s3Client = s3.New(sess)
 }
@@ -52,6 +49,7 @@ func parseReq(r io.Reader) (*tos3.Request, error) {
 		return nil, err
 	}
 
+	fmt.Printf("Got: %s\n", blob)
 	req := new(tos3.Request)
 	if err := json.Unmarshal(blob, req); err != nil {
 		return nil, err
@@ -61,14 +59,22 @@ func parseReq(r io.Reader) (*tos3.Request, error) {
 }
 
 func quotaCheck(req *tos3.Request) {
+	// TODO: Implement me.
 }
 
 func uploadIt(rw http.ResponseWriter, req *http.Request) {
-        ctx, span := trace.StartSpan(req.Context(), "uploadIt")
-        defer span.End()
+	ctx, span := trace.StartSpan(req.Context(), "uploadIt")
+	defer span.End()
 	defer req.Body.Close()
 
-	preq, err := parseReq(req.Body)
+	hdr := req.Header
+	payloadJSON := hdr.Get("payload_json")
+	if len(payloadJSON) == 0 {
+		http.Error(rw, `expected "payload_json" in the request headers`, http.StatusBadRequest)
+		return
+	}
+
+	preq, err := parseReq(strings.NewReader(payloadJSON))
 	if err != nil {
 		http.Error(rw, err.Error(), http.StatusBadRequest)
 		return
@@ -84,8 +90,42 @@ func uploadIt(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	// Firstly detect the content-type.
+	var contentType string
+	// We've got to sniff the contentType first
+	sniffBytes := make([]byte, 512)
+	if n, err := io.ReadAtLeast(req.Body, sniffBytes, 1); err == nil && n > 0 {
+		contentType = http.DetectContentType(sniffBytes[:n])
+	}
+	preq.ContentType = contentType
+
+	// We need to have an io.ReadSeeker in order
+	// for the S3 upload to succeed.
+	tmpf, err := os.CreateTemp(os.TempDir(), "upload")
+	if err != nil {
+		http.Error(rw, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer tmpf.Close()
+
+	// Firstly write back the sniff bytes.
+	if _, err := tmpf.Write(sniffBytes); err != nil {
+		http.Error(rw, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if _, err := io.Copy(tmpf, req.Body); err != nil {
+		http.Error(rw, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if _, err := tmpf.Seek(0, 0); err != nil {
+		http.Error(rw, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	preq.S3Client = s3Client
-	resp, err := preq.UploadToS3(ctx)
+	resp, err := preq.FUploadToS3(ctx, tmpf)
 	if err != nil {
 		http.Error(rw, err.Error(), http.StatusInternalServerError)
 		return
@@ -110,7 +150,7 @@ func main() {
 
 	oce, err := ocagent.NewExporter(
 		ocagent.WithInsecure(),
-		ocagent.WithServiceName("cmd/tos3"),
+		ocagent.WithServiceName(otils.EnvOrAlternates("TO_S3_SERVER_SERVICE_NAME", "cmd/tos3")),
 		ocagent.WithAddress(*ocAgentAddress),
 	)
 	if err != nil {

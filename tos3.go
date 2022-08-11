@@ -79,10 +79,7 @@ var (
 )
 
 func (req *Request) Validate() error {
-	if req == nil || req.URL == "" {
-		return errEmptyURL
-	}
-	if req.Path == "" {
+	if req == nil || req.Path == "" {
 		return errEmptyPath
 	}
 	if req.Bucket == "" {
@@ -103,7 +100,22 @@ func (req *Request) Delete() (*Response, error) {
 	return nil, errUnimplemented
 }
 
-func (req *Request) FUploadToS3(body io.ReadSeeker) (*Response, error) {
+func (req *Request) FUploadToS3(ctx context.Context, body io.ReadSeeker) (_ *Response, rerr error) {
+	ctx, span := trace.StartSpan(ctx, "(*Request).FUploadToS3")
+	defer func() {
+		if rerr != nil {
+			span.SetStatus(trace.Status{
+				Message: rerr.Error(),
+				Code:    trace.StatusCodeInternal,
+			})
+		}
+		span.End()
+	}()
+
+	if err := req.Validate(); err != nil {
+		return nil, err
+	}
+
 	// TODO: See if this content was already uploaded,
 	// bearing the same path and MD5Checksum then
 	// make that a retrieval instead of an upload
@@ -169,6 +181,10 @@ func (req *Request) UploadToS3(ctx context.Context) (_ *Response, rerr error) {
 		return nil, err
 	}
 
+	if req.URL == "" {
+		return nil, errEmptyURL
+	}
+
 	hreq, err := http.NewRequestWithContext(ctx, "GET", req.URL, nil)
 	if err != nil {
 		return nil, err
@@ -187,8 +203,8 @@ func (req *Request) UploadToS3(ctx context.Context) (_ *Response, rerr error) {
 	var contentType string
 	// We've got to sniff the contentType first
 	sniffBytes := make([]byte, 512)
-        if n, err := io.ReadAtLeast(res.Body, sniffBytes, 1); err == nil && n > 0 {
-            contentType = http.DetectContentType(sniffBytes[:n])
+	if n, err := io.ReadAtLeast(res.Body, sniffBytes, 1); err == nil && n > 0 {
+		contentType = http.DetectContentType(sniffBytes[:n])
 	}
 
 	// Otherwise we have to bite the bullet here
@@ -219,7 +235,7 @@ func (req *Request) UploadToS3(ctx context.Context) (_ *Response, rerr error) {
 	}
 	req.ContentType = contentType
 	req.ContentLength = n
-	s3Res, err := req.FUploadToS3(tmpf)
+	s3Res, err := req.FUploadToS3(ctx, tmpf)
 	if err != nil {
 		return nil, err
 	}

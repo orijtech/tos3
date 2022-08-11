@@ -107,6 +107,8 @@ github.com/odeke-em/go-uuid v0.0.0-20151221120446-b211d769a9aa h1:XEhClAZN5U0GUT
 github.com/odeke-em/go-uuid v0.0.0-20151221120446-b211d769a9aa/go.mod h1:omlfAqAAOXYL53jxw8wG+G2xH7NqbkJPlDeGP9YpP6g=
 github.com/odeke-em/tmpfile v0.0.0-20160613075305-c3f30bc34d6a h1:o3rLG0VXHww2o86LYg9HZjEM6qeZ7VUtrQRi3yndSUo=
 github.com/odeke-em/tmpfile v0.0.0-20160613075305-c3f30bc34d6a/go.mod h1:Udn2PRbvC0hxOjzIuoGzWkqztUW9alTudGqi4CNfjtM=
+github.com/orijtech/otils v0.0.2 h1:nbdAT171Xo98hOEmfWkuxWnNgoyNscnGMd5YnrXzblg=
+github.com/orijtech/otils v0.0.2/go.mod h1:ptnjhGLL7nB/n55+7NbDs96aFkZHtmj4PCFsgG6aac8=
 github.com/pkg/errors v0.9.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
