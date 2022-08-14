@@ -50,9 +50,11 @@ func pathOf(req *tos3.Request) string {
 	return path
 }
 
+var tracedHTTPClient = &http.Client{Transport: &ochttp.Transport{}}
+
 func init() {
 	envCred := credentials.NewEnvCredentials()
-	config := aws.NewConfig().WithCredentials(envCred)
+	config := aws.NewConfig().WithCredentials(envCred).WithHTTPClient(tracedHTTPClient)
 	sess := session.Must(session.NewSession(config))
 	s3Client = s3.New(sess)
 }
@@ -156,7 +158,7 @@ func uploadIt(rw http.ResponseWriter, req *http.Request) {
 
 func main() {
 	var port int
-	ocAgentAddress := flag.String("ocagent-addr", "", "The address to connect to the OpenCensus/Telemetry CAgent")
+	ocAgentAddress := flag.String("ocagent-addr", "", "The address to connect to the OpenCensus/Telemetry OCAgent")
 	flag.IntVar(&port, "port", 8833, "the port to run it on")
 	flag.StringVar(&defaultBucket, "default-bucket", "tatan", "the default bucket to use")
 	flag.StringVar(&defaultPath, "common-io", "tatan", "the default path to use")

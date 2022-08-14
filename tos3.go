@@ -152,7 +152,7 @@ func (req *Request) FUploadToS3(ctx context.Context, body io.ReadSeeker) (_ *Res
 		pin.ContentLength = &req.ContentLength
 	}
 
-	pout, err := req.S3Client.PutObject(pin)
+	pout, err := req.S3Client.PutObjectWithContext(ctx, pin)
 	if err != nil {
 		return nil, err
 	}
